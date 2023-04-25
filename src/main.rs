@@ -1,37 +1,44 @@
-use teloxide::{prelude::*, utils::command::BotCommands};
+use teloxide::{dispatching::dialogue::InMemStorage, prelude::*};
+
+type MyDialogue = Dialogue<State, InMemStorage<State>>;
+type HandlerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+#[derive(Clone, Default)]
+pub enum State {
+    #[default]
+    Respond,
+}
 
 #[tokio::main]
 async fn main() {
     pretty_env_logger::init();
-    log::info!("Starting command bot...");
+    log::info!("Starting dialogue bot...");
 
     let bot = Bot::from_env();
 
-    Command::repl(bot, answer).await;
+    Dispatcher::builder(
+        bot,
+        Update::filter_message()
+            .enter_dialogue::<Message, InMemStorage<State>, State>()
+            .branch(dptree::case![State::Respond].endpoint(respond))
+    )
+    .dependencies(dptree::deps![InMemStorage::<State>::new()])
+    .enable_ctrlc_handler()
+    .build()
+    .dispatch()
+    .await;
 }
 
-#[derive(BotCommands, Clone)]
-#[command(rename_rule = "lowercase", description = "These commands are supported:")]
-enum Command {
-    #[command(description = "display this text.")]
-    Help,
-    #[command(description = "handle a username.")]
-    Username(String),
-    #[command(description = "handle a username and an age.", parse_with = "split")]
-    UsernameAndAge { username: String, age: u8 },
-}
-
-async fn answer(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
-    match cmd {
-        Command::Help => bot.send_message(msg.chat.id, Command::descriptions().to_string()).await?,
-        Command::Username(username) => {
-            bot.send_message(msg.chat.id, format!("Your username is @{username}.")).await?
+async fn respond(bot: Bot, dialogue: MyDialogue, msg: Message) -> HandlerResult {
+    match msg.text() {
+        Some(text) => {
+            let report = format!("Full name: {text}\n");
+            bot.send_message(msg.chat.id, report).await?;
+            dialogue.exit().await?;
         }
-        Command::UsernameAndAge { username, age } => {
-            bot.send_message(msg.chat.id, format!("Your username is @{username} and age is {age}."))
-                .await?
+        None => {
+            bot.send_message(msg.chat.id, "Send me plain text.").await?;
         }
-    };
-
+    }
     Ok(())
 }
